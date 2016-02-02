@@ -1,6 +1,6 @@
 
-var Stream = require("stream");
 var Browserify = require("browserify");
+var Stream = require("stream");
 var Path = require("path");
 var Fs = require("fs");
 

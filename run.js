@@ -6,7 +6,7 @@ var Main = require("./main.js");
 var args = Minimist(process.argv.slice(2));
 if ("help" in args)
   process.stdout.write([
-    "Glitterdust bundles JavaScript scripts.",
+    "Glitterdust is a tool to test and benchmark JavaScript instrumenters.",
     "Recognized arguments:",
     "  --mode        either ``batch'' or ``demo'', indicate the mode",
     "  --instrument  path to a file where ``module.exports'' points to the instrumentation function",
