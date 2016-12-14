@@ -4,20 +4,20 @@ var Stream = require("stream");
 var Path = require("path");
 var Fs = require("fs");
 
+function collect (path) {
+  if (!path)
+    return {};
+  var names = Fs.readdirSync(path);
+  var files = {};
+  for (var i=0; i<names.length; i++)
+    if (names[i] !== ".DS_Store")
+      files[names[i]] = Fs.readFileSync(path+"/"+names[i], {encoding:"utf8"});
+  return files;
+}
+
+function constant (x) { return function () { return x } }
+
 module.exports = function (options) {
-
-  function collect (path) {
-    if (!path)
-      return {};
-    var names = Fs.readdirSync(path);
-    var files = {};
-    for (var i=0; i<names.length; i++)
-      if (names[i] !== ".DS_Store")
-        files[names[i]] = Fs.readFileSync(path+"/"+names[i], {encoding:"utf8"});
-    return files;
-  }
-
-  function constant (x) { return function () { return x } }
 
   var basedir = __dirname+"/"+options.mode;
   var js = Fs.readFileSync(basedir+"/script.js", {encoding:"utf8"});
