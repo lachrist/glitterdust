@@ -10,4 +10,3 @@ main = do [path] <- System.Environment.getArgs
           putStrLn $ case Parser.apply Expression.parse str
                      of [(expr, "")] -> Interpreter.run expr False    
                         xs            -> "parse-error " ++ show xs
-

@@ -1,40 +1,72 @@
 
-import qualified Expression
-import qualified Control.Monad.State
+import qualified Store
+import qualified State
+import qualified Control
+import qualified Control.Monad
+import qualified Primitive
+
+type CAddress = Store.Address Control.Control
+type CStore = Store.Store Control.Control
 
 --------------
 -- Builders --
 --------------
 
-constant :: (Primitive.Wrappable w) => w -> Expression
-constant w = Expression.Constant $ Primitive.wrap w
+register :: Control.Control -> State.State CStore CAddress
+register c = do cs <- State.get
+                State.put $ Store.add c cs
+                return $ Store.nxt cs
 
-lookup :: String -> Expression
-lookup s = Expression.Lookup $ Expression.V s
+list :: [CAddress] -> State.State CStore CAddress
+list [] = register $ Control.Constant $ Primitive.wrap ()
+list (a:as) = do a1 <- register $ Control.Get $ Control.V "cons"
+                 a2 <- list as
+                 register $ Control.Call a1 [a, a2]
 
-list :: [Expression] -> Expression
-list [] = constant ()
-list (e:es) = Expression.Call (Expression.Lookup $ Expression.V "cons") [e, list es]
+trap :: String -> CAddress -> [CAddress] -> State.State CStore CAddress
+trap s a as = do a1 <- register $ Control.Get $ Control.V s
+                 a' <- register $ Control.Constant $ Primitive.wrap $ show a
+                 register $ Control.Call a1 (as++[a'])
 
 ----------------
 -- Instrument --
 ----------------
 
-type Locator :: (String, Int)
+visit :: CAddress -> State.State CStore CAddress
+visit a = State.get >>= instrument a . Store.get a
 
-instrument :: String -> Expression.Expression -> Expression.Expression
-instrument s e = Control.Monad.State.runState (Expression.visit f) 0
-  where f i e@(Expression.Lambda _ _)       = trap "$lambda" [e] (s, i)
-        f i e@(Expression.Constant _ _)     = trap "$constant" [e] (s, i)
-        f i   (Expression.Call e es)        = trap "$call" [e, list es] (s, i)
-        f i   (Expression.Branch e1 e2 e3)  = Branch (trap "$branch" [e1] (s, i)) e2 e3
-        f i   (Expression.Eval e)           = Eval $ trap "$eval" [e] (s, i)
-        f i e@(Expression.Get v)            = trap "$get" [constant $ show v, e] (s, i)
-        f i   (Expression.Set v e)          = environment (Expression.Set v)    (trap "$set"    [constant $ show v, e] (s, i))
-        f i   (Expression.Def v e)          = environment (Expression.Define v) (trap "$def" [constant $ show v, e] (s, i))
+instrument :: CAddress -> Control.Control -> State.State CStore CAddress
+instrument a (Control.Constant _)      = trap "$constant" a [a]
+instrument a (Control.Get _)           = trap "$get" a [a]
+instrument a (Control.Namespace)       = trap "$namespace" a [a]
+instrument a (Control.Lambda vs a1)    = do a' <- (visit a1 >>= register . Control.Lambda vs)
+                                            trap "$lambda" a [a']  
+instrument a (Control.Call a1 as)      = do a1' <- visit a1
+                                            as' <- Control.Monad.sequence $ map visit as
+                                            as'' <- list as' 
+                                            trap "$call" a [a1', as'']
+instrument a (Control.Branch a1 a2 a3) = do a1' <- visit a1 >>= trap "$if" a  . (:[])
+                                            a2' <- visit a2
+                                            a3' <- visit a3
+                                            register $ Control.Branch a1' a2' a3' 
+instrument a (Control.Def v a1)        = (visit a1 >>= trap "$def" a . (:[])) >>= environment (Control.Def v)
+instrument a (Control.Set v a1)        = (visit a1 >>= trap "$set" a . (:[])) >>= environment (Control.Set v)
 
-environment :: (Expression.Expression -> Expression.Expression) -> Expression -> Expression
-environment f e = Begin [Define "$" e, f $ Call (lookup "car") [lookup "$"], Call (lookup "cdr") [lookup "$"]]
+-- (define x 1)
+--
+-- (begin
+--   (define $ ($def ($constant 1)))
+--   (define x (car $))
+--   (cdr $))
 
-trap :: String -> [Expression] -> Locator -> Expression
-trap s1 es (s2,i) = Expression.Call (lookup s1) (es ++ [constant $ s2 ++ ('@':show i)])
+environment :: (CAddress -> Control.Control) -> CAddress -> State.State CStore CAddress
+environment f a = do a0 <- register $ Control.Get $ Control.V "begin"
+                     a1 <- register $ Control.Def (Control.V "$") a
+                     a2 <- do a1 <- register $ Control.Get $ Control.V "car"
+                              a2 <- register $ Control.Get $ Control.V "$"
+                              a3 <- register $ Control.Call a1 [a2]
+                              register $ f a3
+                     a3 <- do a1 <- register $ Control.Get $ Control.V "cdr"
+                              a2 <- register $ Control.Get $ Control.V "$"
+                              register $ Control.Call a1 [a2]
+                     register $ Control.Call a0 [a1, a2, a3]

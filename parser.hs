@@ -21,7 +21,7 @@ instance Applicative Parser where
 -- Control.Applicative.many :: Alternative f => f a -> f [a]
 -- Data.Foldable.asum :: (Foldable t, Alternative f) => t (f a) -> f a
 instance Control.Applicative.Alternative Parser where
-  empty = P (\s -> [])
+  empty = P $ const []
   p1 <|> p2 = P (\s -> case apply p1 s
                        of [] -> apply p2 s
                           xs -> xs)

@@ -24,14 +24,14 @@ instance Read Primitive where
   readsPrec _ ('#':'f':s) = [(B False, s)]
   readsPrec i str = map (\(x, s) -> (F x, s)) (readsPrec i str) ++ map (\(x, s) -> (S x, s)) (readsPrec i str)
 
-class Wrappable () where
-  wrap () = Primitive N
-  unwrap N = Just ()
-  unwrap _ = Nothing
-
 class Wrappable a where
   wrap :: a -> Primitive
   unwrap :: Primitive -> Maybe a
+
+instance Wrappable () where
+  wrap _ = N
+  unwrap N = Just ()
+  unwrap _ = Nothing
 
 instance Wrappable Bool where
   wrap = B

@@ -1,64 +1,92 @@
 
-module Expression(Variable(V), Expression(Lambda, Begin, Call, Eval, Define, Set, If, Lookup, Constant, StoredConstant), parse, visit) where
+module Control(Variable(V), Control(Lambda, Call, Namespace, Def, Set, Get, Branch, Constant, StoredConstant), parse) where
 
 import qualified Parser
+import qualified State
 import qualified Store
 import qualified Control.Monad
 import qualified Control.Monad.State
+import qualified Control.Monad.Trans.Class
 import qualified Control.Applicative
 import qualified Data.Foldable
 import qualified Primitive
 
 newtype Variable = V String deriving (Eq, Show)
 
+type CStore = Store.Store Control
 type CAddress = Store.Address Control
+type CStoreParser = State.StateT CStore Parser.Parser
 
-data Control = Lambda [Variable] Expression
-             | Call Expression [Expression]
-             | Eval Expression
-             | Def Variable Expression
-             | Set Variable Expression
-             | Branch Expression Expression Expression
-             | Get Variable 
+data Control = Lambda [Variable] CAddress
+             | Call CAddress [CAddress]
+             | Namespace
+             | Def Variable CAddress
+             | Set Variable CAddress
+             | Get Variable
+             | Branch CAddress CAddress CAddress
              | Constant Primitive.Primitive
              | StoredConstant Primitive.Primitive
              deriving (Eq, Show)
 
-parse :: Parser.Parser Expression
-parse = expr <* spaces
-  where comment = Parser.char ';' >> Control.Applicative.many (Parser.sat (/='\n')) >> Parser.char '\n'
-        blank = Parser.sat (`elem` [' ', '\t', '\n']) >> return ()
-        spaces = Control.Applicative.many $ comment Control.Applicative.<|> blank
-        parenth p = (spaces >> Parser.char '(') >> p <* (spaces >> Parser.char ')')
-        sexpr s p = parenth $ spaces >> Parser.string s >> p
-        var       = spaces >> Control.Monad.liftM V (Control.Applicative.some $ Parser.sat (`notElem` [' ', '\t', '\n', '(', ')', ';']))
-        expr      = Data.Foldable.asum [lambda, eval, set, def, branch, call, constant, get]
-        lambda    = sexpr "lambda" $ Control.Monad.liftM2 Lambda (parenth $ Control.Applicative.many var) expr
-        eval      = sexpr "eval"   $ Control.Monad.liftM Eval expr
-        def       = sexpr "define" $ Control.Monad.liftM2 Def var expr
-        set       = sexpr "set!"   $ Control.Monad.liftM2 Set var expr
-        branch    = sexpr "if"     $ Control.Monad.liftM3 If expr expr expr
-        call      = parenth $ Control.Monad.liftM2 Call expr (Control.Applicative.many expr)
-        constant  = Control.Monad.liftM Constant (spaces >> Parser.fromRead)
-        get       = Control.Monad.liftM Get var
+parse :: String -> CStore -> Either String (CAddress, CStore)
+parse s cs = case Parser.apply (State.apply control cs) s
+             of [] -> Left "no parsing"
+                [(x, "")] -> Right x
+                [(_, s)] -> Left $ "parsing reminder: " ++ s
+                _ -> Left "multiple parsing (should never happend)"
 
-type Visitor = (Int -> Expression -> Expression)
+-------------
+-- Helpers --
+-------------
 
-visit :: Visitor -> Expression -> Control.Monad.State.State Int Expression
-visit v (Lambda strs expr)         = visit1 v (Lambda strs) expr
-visit v (Def str expr)             = visit1 v (Def str) expr 
-visit v (Set str expr)             = visit1 v (Set str) expr 
-visit v (Eval expr)                = visit1 v Eval expr 
-visit v (Call expr exprs)          = do expr' <- visit v expr
-                                        exprs' <- sequence $ map (visit v) exprs
-                                        increment v (Call expr' exprs')
-visit v (Branch expr1 expr2 expr3) = do expr1' <- visit v expr1
-                                        expr2' <- visit v expr2
-                                        expr3' <- visit v expr3
-                                        increment v (If expr1' expr2' expr3')
+spaces :: Parser.Parser ()
+spaces = (Control.Applicative.many $ comment Control.Applicative.<|> blank) *> return ()
+  where blank = Parser.sat (`elem` [' ', '\t', '\n']) *> return ()
+        comment = Parser.char ';' *> Control.Applicative.many (Parser.sat (/='\n')) *> Parser.char '\n'
 
-visit1 :: Visitor -> (Expression -> Expression) -> Expression -> Control.Monad.State.State Int Expression
-visit1 v f expr = visit v expr >>= (increment v) . f
+variable :: CStoreParser Variable
+variable = Control.Monad.Trans.Class.lift $ spaces *> Control.Monad.liftM V (Control.Applicative.some $ Parser.sat (`notElem` [' ', '\t', '\n', '(', ')', ';']))
 
-increment :: Visitor -> Expression -> Control.Monad.State.State Int Expression
-increment v expr = Control.Monad.State.modify (+1) >> Control.Monad.State.get >>= (return . flip v expr)
+parenthesis :: CStoreParser a -> CStoreParser a
+parenthesis p = (Control.Monad.Trans.Class.lift $ spaces *> Parser.char '(') *> p <* (Control.Monad.Trans.Class.lift $ spaces *> Parser.char ')')
+
+sexpression :: String -> CStoreParser a -> CStoreParser a
+sexpression s p = parenthesis $ (Control.Monad.Trans.Class.lift $ spaces *> Parser.string s) *> p
+
+--------------------------
+-- CStoreParser Control --
+--------------------------
+
+lambda :: CStoreParser Control
+lambda = sexpression "lambda" (Control.Applicative.liftA2 Lambda (parenthesis $ Control.Applicative.many variable) control)
+
+branch :: CStoreParser Control
+branch = sexpression "if" (Control.Applicative.liftA3 Branch control control control)
+
+namespace :: CStoreParser Control
+namespace = sexpression "current-namespace" (pure Namespace)
+
+def :: CStoreParser Control
+def = sexpression "define" (Control.Applicative.liftA2 Def variable control)
+
+set :: CStoreParser Control
+set = sexpression "set!" (Control.Applicative.liftA2 Set variable control)
+
+call :: CStoreParser Control
+call = parenthesis $ Control.Applicative.liftA2 Call control (Control.Applicative.many control)
+
+constant :: CStoreParser Control
+constant = Control.Applicative.liftA Constant (Control.Monad.Trans.Class.lift $ spaces *> Parser.fromRead)
+
+get :: CStoreParser Control
+get = Control.Applicative.liftA Get variable
+
+---------------
+-- Top Level --
+---------------
+
+control :: CStoreParser CAddress
+control = do c <- Data.Foldable.asum [lambda, branch, namespace, def, set, call, constant, get]
+             cs <- State.get
+             State.put $ Store.add c cs
+             return $ Store.nxt cs
