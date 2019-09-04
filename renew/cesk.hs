@@ -4,8 +4,9 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE EmptyDataDeriving #-}
+{-# LANGUAGE FunctionalDependencies #-}
 
-import qualified Data.Map.Strict
+import qualified Data.Map
 import qualified Text.Parsec
 import qualified Text.Parsec.String
 import qualified Data.Word
@@ -25,50 +26,116 @@ class ShowIndent a where
 indent :: Int -> String
 indent ι = "\n" ++ (take (2 * ι) (repeat ' '))
 
-indentOne :: ShowIndent a => Int -> a -> String
-indentOne ι ν = indent (ι + 1) ++ showIndent (ι + 1) ν
+showIndentOne :: ShowIndent a => Int -> a -> String
+showIndentOne ι χ = indent (ι + 1) ++ showIndent (ι + 1) χ
 
-indentAll :: ShowIndent a => Int -> [a] -> String
-indentAll ι νs = concat $ map (indentOne ι) νs
+showIndentAll :: ShowIndent a => Int -> [a] -> String
+showIndentAll ι χs = (concat $ map (showIndentOne ι) χs)
 
-escape :: String -> String
-escape ν = "\"" ++ concat (map repl ν) ++ "\""
-  where repl '\n' = "\\n"
-        repl '\t' = "\\t"
-        repl '"' = "\\\""
-        repl ν = [ν]
+showIndentAllBracket :: ShowIndent a => Int -> [a] -> String
+showIndentAllBracket ι χs = indent (ι + 1) ++ "[" ++ showIndentAll (ι + 1) χs ++ "]"
 
 ----------
 -- Data --
 ----------
 
+type Boolean = Bool
+
 type Number = Float
 
 type Builtin = String
 
-data Data x = Null
-            | Bool Bool
+type Cons v = (v, v)
+
+type Closure v = (Environment v, [Identifier], Control)
+
+data Atomic = Null
+            | Boolean Boolean
             | Number Number
             | String String
             | Builtin Builtin
-            | Cons x x
-            | Closure (Environment x) [Identifier] Control
-            deriving (Eq, Show)
 
-showData :: Data x -> String
-showData (Null) = "#n"
-showData (Bool True) = "#t"
-showData (Bool False) = "#f"
-showData (Number ν) = show ν
-showData (String ν) = escape ν
-showData (Builtin ν) = "#<" ++ ν ++ ">"
-showData (Cons _ _) = "#<Cons>"
-showData (Closure _ _ _) = "<#Closure>"
+instance Eq Atomic where
+  Null == Null = True
+  (Boolean ο) == (Boolean ο') = ο == ο'
+  (Number ν) == (Number ν') = ν == ν' || (ν /= ν && ν' /= ν')
+  (String τ) == (String τ') = τ == τ'
+  (Builtin β) == (Builtin β') = β == β'
+  _ == _ = False
 
-instance (ShowIndent x) => ShowIndent (Data x) where
-  showIndent ι (Cons ξ ξ') = "(cons" ++ indentOne ι ξ ++ indentOne ι ξ' ++ ")"
-  showIndent ι (Closure ε ηs γ) = "(closure (" ++ concat (Data.List.intersperse " " ηs) ++ ") " ++ indentOne ι ε ++ indentOne ι γ ++ ")"
-  showIndent _ δ = showData δ
+data Compound v = Cons (Cons v)
+                | Closure (Closure v)
+
+data Data v = Atomic Atomic
+            | Compound (Compound v)
+
+toAtomic :: Data x -> Maybe Atomic
+toAtomic (Atomic θ) = Just θ
+toAtomic _ = Nothing
+
+toCompound :: Data x -> Maybe (Compound x)
+toCompound (Compound π) = Just π
+toCompound _ = Nothing
+
+isNull :: Data x -> Bool
+isNull (Atomic Null) = True
+isNull _ = False
+
+toBoolean :: Data x -> Maybe Boolean
+toBoolean (Atomic (Boolean ο)) = Just ο
+toBoolean _ = Nothing
+
+toNumber :: Data x -> Maybe Number
+toNumber (Atomic (Number ν)) = Just ν
+toNumber _ = Nothing
+
+toString :: Data x -> Maybe String
+toString (Atomic (String τ)) = Just τ
+toString _ = Nothing
+
+toBuiltin :: Data x -> Maybe Builtin
+toBuiltin (Atomic (Builtin β)) = Just β
+toBuiltin _ = Nothing
+
+toCons :: Data x -> Maybe (Cons x)
+toCons (Compound (Cons (ξ, ξ'))) = Just (ξ, ξ')
+toCons _ = Nothing
+
+toClosure :: Data x -> Maybe (Closure x) 
+toClosure (Compound (Closure (ε, ηs, γ))) = Just (ε, ηs, γ)
+toClosure _ = Nothing
+
+showAtomic :: Atomic -> String
+showAtomic (Null) = "#n"
+showAtomic (Boolean True) = "#t"
+showAtomic (Boolean False) = "#f"
+showAtomic (Number ν) = if ν == fromInteger (round ν) then show (round ν) else show ν
+showAtomic (String τ) = escape τ
+  where escape ν = "\"" ++ concat (map repl ν) ++ "\""
+        repl '\n' = "\\n"
+        repl '\t' = "\\t"
+        repl '"' = "\\\""
+        repl ν = [ν]
+showAtomic (Builtin β) = "<#" ++ β ++ ">"
+
+showCompound :: Compound v -> String
+showCompound (Cons _) = "<Cons>"
+showCompound (Closure _) = "<Closure>"
+
+showData :: Data v -> String
+showData (Atomic θ) = showAtomic θ
+showData (Compound π) = showCompound π
+
+instance ShowIndent Atomic where
+  showIndent _ θ = showAtomic θ
+
+instance (ShowIndent v) => ShowIndent (Compound v) where
+  showIndent ι (Cons (ξ, ξ')) = "(cons" ++ showIndentOne ι ξ ++ showIndentOne ι ξ' ++ ")"
+  showIndent ι (Closure (ε, ηs, γ)) = "(closure (" ++ concat (Data.List.intersperse " " ηs) ++ ") " ++ showIndentOne ι ε ++ showIndentOne ι γ ++ ")"
+
+instance (ShowIndent v) => ShowIndent (Data v) where
+  showIndent ι (Atomic θ) = showIndent ι θ
+  showIndent ι (Compound π) = showIndent ι π
 
 -------------
 -- Control --
@@ -76,178 +143,20 @@ instance (ShowIndent x) => ShowIndent (Data x) where
 
 type Identifier = String
 
-data Control = LiteralNull
-             | LiteralBool Bool
-             | LiteralNumber Number
-             | LiteralString String
-             | Get Identifier
-             | If Control Control Control
-             | Let Identifier Control Control
-             | Lambda [Identifier] Control
-             | Apply Control [Control]
-             deriving (Eq, Show)
+data Control = Literal Atomic
+             | Variable Identifier
+             | Condition Control Control Control
+             | Binding Identifier Control Control
+             | Abstraction [Identifier] Control
+             | Application Control [Control]
 
 instance ShowIndent Control where
-  showIndent _ LiteralNull =  "#n"
-  showIndent _ (LiteralBool True) = "#t"
-  showIndent _ (LiteralBool False) = "#t"
-  showIndent _ (LiteralNumber ν) = show ν
-  showIndent _ (LiteralString ν) = escape ν
-  showIndent _ (Get η) = η
-  showIndent ι (If γ γ' γ'') = "(if" ++ indentOne ι γ ++ indentOne ι γ' ++ indentOne ι γ'' ++ ")"
-  showIndent ι (Let η γ γ') = "(let " ++ η ++ indentOne ι γ ++ indentOne ι γ' ++ ")"
-  showIndent ι (Lambda ηs γ) = "(lambda (" ++ concat (Data.List.intersperse " " ηs) ++ ")" ++ indentOne ι γ ++ ")"
-  showIndent ι (Apply (Get η) γs) = "(" ++ η ++ " " ++ indentAll ι γs ++ ")"
-  showIndent ι (Apply γ γs) = "(" ++ indentAll ι (γ : γs) ++ ")"
-
------------------
--- Environment --
------------------
-
-type Environment x = Data.Map.Strict.Map Identifier x
-
-instance (ShowIndent x) => ShowIndent (Environment x) where
-  showIndent ι ε = "{" ++ concat (map (\(η, ξ) -> indent (ι + 1) ++ η ++ ": " ++ showIndent (ι + 1) ξ) (Data.Map.Strict.toAscList ε)) ++ "}"
-
------------
--- Store --
------------
-
-type Address = Data.Word.Word32
-
-type Store y = Data.Map.Strict.Map Address y
-
-instance (ShowIndent y) => ShowIndent (Store y) where
-  showIndent ι σ = "[" ++ concat (map (\(α, ψ) -> indent (ι + 1) ++ show α ++ " -> " ++ showIndent (ι + 1) ψ) (Data.Map.Strict.toAscList σ)) ++ "]"
-
-------------------
--- Kontinuation --
-------------------
-
-data Kontinuation x = LetKont (Environment x) Identifier Control (Kontinuation x)
-                    | ApplyKont (Environment x) [Control] [x] (Kontinuation x)
-                    | IfKont (Environment x) Control Control (Kontinuation x)
-                    | SuccessKont
-                    deriving (Eq, Show)
-
-instance (ShowIndent x) => ShowIndent (Kontinuation x) where
-  showIndent ι (LetKont ε η γ κ) = "(let-kont " ++ η ++ indentOne ι ε ++ indentOne ι γ ++ indentOne ι κ ++ ")"
-  showIndent ι (ApplyKont ε γs ξs κ) = "(apply-kont" ++ indentOne ι ε ++ indentAll ι γs ++ indentAll ι ξs ++ indentOne ι κ ++ ")"
-  showIndent ι (IfKont ε γ γ' κ) = "(if-kont " ++ indentOne ι ε ++ indentOne ι γ ++ indentOne ι γ' ++ indentOne ι κ ++ ")"
-  showIndent _ SuccessKont = "(success-kont)"
-
------------
--- State --
------------
-
-data State x y = Ongoing Control (Environment x) (Store y) (Kontinuation x)
-               | Success (Store y) x
-               | Failure String
-               deriving (Eq, Show)
-
-instance (ShowIndent x, ShowIndent y) => ShowIndent (State x y) where
-  showIndent ι (Ongoing γ ε σ κ) = "(ongoing" ++ indentOne ι γ ++ indentOne ι ε ++ indentOne ι σ ++ indentOne ι κ ++ ")"
-  showIndent ι (Success σ ξ) = "(success" ++ indentOne ι ξ ++ indentOne ι σ ++ ")"
-  showIndent ι (Failure ν) = "(failure " ++ ν ++ ")"
-
-------------
--- System --
-------------
-
-class (Eq x, Eq y) => System x y where
-  dataToValue :: Store y -> Data x -> (Store y, x)
-  valueToData :: Store y -> x -> Data x
-  mutate :: Store y -> x -> Data x -> Maybe (Store y)
-  inspect :: Store y -> x -> String
-
------------------
--- Interpreter --
------------------
-
-step :: (System x y) => State x y -> IO (State x y)
-step (Ongoing (LiteralNull) _ σ κ) = kontinue κ (dataToValue σ (Null))
-step (Ongoing (LiteralBool ν) _ σ κ) = kontinue κ (dataToValue σ (Bool ν))
-step (Ongoing (LiteralString ν) _ σ κ) = kontinue κ (dataToValue σ (String ν))
-step (Ongoing (LiteralNumber ν) _ σ κ) = kontinue κ (dataToValue σ (Number ν))
-step (Ongoing (Lambda ηs γ) ε σ κ) = kontinue κ (dataToValue σ (Closure ε ηs γ))
-step (Ongoing (Get η) ε σ κ) = maybe (return $ Failure $ "Undeclared identifier: " ++ η)
-                                     (kontinue κ . (σ,))
-                                     (Data.Map.Strict.lookup η ε)
-step (Ongoing (Let η γ γ') ε σ κ) = return $ Ongoing γ ε σ (LetKont ε η γ' κ)
-step (Ongoing (Apply γ γs) ε σ κ) = return $ Ongoing γ ε σ (ApplyKont ε γs [] κ)
-step (Ongoing (If γ γ' γ'') ε σ κ) = return $ Ongoing γ ε σ (IfKont ε γ' γ'' κ)
-step φ = return φ
-
-kontinue :: (System x y) => Kontinuation x -> (Store y, x) -> IO (State x y)
-kontinue SuccessKont (σ, ξ) = return $ Success σ ξ
-kontinue (IfKont ε γ γ' κ) (σ, ξ) = case valueToData σ ξ of
-  (Number 0) -> return $ Ongoing γ' ε σ κ
-  _          -> return $ Ongoing γ  ε σ κ
-kontinue (LetKont ε η γ κ) (σ, ξ) = return $ Ongoing γ (Data.Map.Strict.insert η ξ ε) σ κ
-kontinue (ApplyKont ε (γ:γs) ξs κ) (σ, ξ) = return $ Ongoing γ ε σ (ApplyKont ε γs (ξs ++ [ξ]) κ)
-kontinue (ApplyKont ε [] ξs κ) (σ, ξ) = case valueToData σ (head $ ξs ++ [ξ]) of
-  (Closure ε ηs γ) -> return $ Ongoing γ (Data.Map.Strict.union (Data.Map.Strict.fromList (zip ηs (tail ξs ++ [ξ]))) ε) σ κ
-  (Builtin β) -> do μ <- (applyBuiltin β (tail $ ξs ++ [ξ]) σ)
-                    maybe (return $ Failure $ "Builtin (" ++ β ++ ") application failure") (kontinue κ) μ
-  δ -> return $ Failure $ "Cannot apply: " ++ showData δ
-
-applyBuiltin :: (System x y) => String -> [x] -> Store y -> IO (Maybe (Store y, x))
-applyBuiltin "read-line" [] σ = Control.Monad.liftM (Just . (dataToValue σ) . String) getLine
-applyBuiltin "write" (ξ:[]) σ = case valueToData σ ξ of
-  (String ν) -> putStr ν >> (return $ Just (σ, ξ))
-  _ -> return Nothing
-applyBuiltin β ξs σ = return $ applyPure β ξs σ
-
-applyPure :: (System x y) => String -> [x] -> Store y -> Maybe (Store y, x)
-applyPure "eq?" (ξ:ξ':[]) σ = Just $ dataToValue σ (Bool $ ξ == ξ')
-applyPure "inspect" (ξ:[]) σ = Just $ dataToValue σ (String $ inspect σ ξ)
-applyPure "cons" (ξ:ξ':[]) σ = Just $ dataToValue σ (Cons ξ ξ')
-applyPure "car" (ξ:[]) σ = consOnly (valueToData σ ξ) (Just . (σ,) . fst)
-applyPure "cdr" (ξ:[]) σ = consOnly (valueToData σ ξ) (Just . (σ,) . snd)
-applyPure "set-car!" (ξ:ξ':[]) σ = consOnly (valueToData σ ξ) (\(_,ξ'') -> fmap (,ξ) (mutate σ ξ (Cons ξ' ξ'')))
-applyPure "set-cdr!" (ξ:ξ':[]) σ = consOnly (valueToData σ ξ) (\(ξ'',_) -> fmap (,ξ) (mutate σ ξ (Cons ξ'' ξ')))
-applyPure β ξs σ = fmap (dataToValue σ) (applyData β (map (valueToData σ) ξs))
-
-applyData :: (Eq x) => String -> [Data x] -> Maybe (Data x)
-applyData "equal?" (δ : δ' : []) = Just $ Bool $ δ == δ'
-applyData "&&" (Bool ν   : Bool ν'   : []) = Just $ Bool   $ ν && ν'
-applyData "||" (Bool ν   : Bool ν'   : []) = Just $ Bool   $ ν || ν'
-applyData "="  (Number ν : Number ν' : []) = Just $ Bool   $ ν == ν'
-applyData "<"  (Number ν : Number ν' : []) = Just $ Bool   $ ν <  ν'
-applyData "<=" (Number ν : Number ν' : []) = Just $ Bool   $ ν <= ν'
-applyData "+"  (Number ν : Number ν' : []) = Just $ Number $ ν +  ν'
-applyData "-"  (Number ν : Number ν' : []) = Just $ Number $ ν -  ν'
-applyData "*"  (Number ν : Number ν' : []) = Just $ Number $ ν *  ν'
-applyData "/"  (Number ν : Number ν' : []) = Just $ Number $ ν /  ν'
-applyData "any->string" (δ : []) = Just $ String $ showData δ
-applyData "string-append" (String ν : String ν' : []) = Just $ String $ ν ++ ν'
-applyData "string-length" (String ν : []) = Just $ Number $ fromIntegral $ length ν
-applyData "substring" (String ν : Number ν' : Number ν'' : []) = Just $ String $ take (round $ ν'' - ν') (drop (round ν') ν)
-applyData "number->string" (Number ν : []) = Just $ String $ show ν
-applyData "string->number" (String ν : []) = case reads ν of
-  [(ν', "")] -> Just $ Number ν'
-  _ -> Nothing
-applyData _ _  = Nothing
-
--------------
--- Helpers --
--------------
-
-fresh :: Store y -> Address
-fresh σ = maybe 0 ((+1) . fst) (Data.Map.Strict.lookupMax σ)
-
-reuse :: (Eq y) => Store y -> y -> Address
-reuse σ ψ = maybe (fresh σ)
-                  id
-                  (Data.Map.Strict.foldrWithKey (\α ψ' μ -> if ψ == ψ' then Just α else μ) Nothing σ)
-
-consOnly :: Data x -> ((x, x) -> Maybe z) -> Maybe z
-consOnly (Cons ξ ξ') f = f (ξ, ξ')
-consOnly _ _ = Nothing
-
-------------
--- Parser --
-------------
+  showIndent ι (Literal θ) = showIndent ι θ
+  showIndent _ (Variable η) = η
+  showIndent ι (Condition γ γ' γ'') = "(if" ++ showIndentOne ι γ ++ showIndentOne ι γ' ++ showIndentOne ι γ'' ++ ")"
+  showIndent ι (Binding η γ γ') = "(let " ++ η ++ showIndentOne ι γ ++ showIndentOne ι γ' ++ ")"
+  showIndent ι (Abstraction ηs γ) = "(lambda (" ++ concat (Data.List.intersperse " " ηs) ++ ")" ++ showIndentOne ι γ ++ ")"
+  showIndent ι (Application γ γs) = "(" ++ showIndentAll ι (γ : γs) ++ ")"
 
 lexer :: Text.Parsec.Token.TokenParser u
 lexer = Text.Parsec.Token.makeTokenParser $ Text.Parsec.Token.LanguageDef {
@@ -255,8 +164,8 @@ lexer = Text.Parsec.Token.makeTokenParser $ Text.Parsec.Token.LanguageDef {
   Text.Parsec.Token.commentEnd = "",
   Text.Parsec.Token.commentLine = ";",
   Text.Parsec.Token.nestedComments = False,
-  Text.Parsec.Token.identStart = Text.Parsec.noneOf "() \t\n#\"",
-  Text.Parsec.Token.identLetter = Text.Parsec.noneOf "() \t\n#\"",
+  Text.Parsec.Token.identStart = Text.Parsec.noneOf "() \t\n",
+  Text.Parsec.Token.identLetter = Text.Parsec.noneOf "() \t\n",
   Text.Parsec.Token.opStart = Text.Parsec.oneOf [],
   Text.Parsec.Token.opLetter = Text.Parsec.oneOf [],
   Text.Parsec.Token.reservedNames = ["if", "let", "lambda", "#n", "#t", "#f"],
@@ -265,173 +174,387 @@ lexer = Text.Parsec.Token.makeTokenParser $ Text.Parsec.Token.LanguageDef {
 }
 
 parserIdentifier = Text.Parsec.Token.identifier lexer
-parserWhiteSpace = Text.Parsec.Token.whiteSpace lexer
-parserStringLiteral = Text.Parsec.Token.stringLiteral lexer
-parserInteger = Text.Parsec.Token.integer lexer
+
 parserParens = Text.Parsec.Token.parens lexer
+
 parserReserved = Text.Parsec.Token.reserved lexer
 
-parserControl :: Text.Parsec.Parsec String u Control
-parserControl = Text.Parsec.choice [
-  Text.Parsec.try parserLiteralNull,
-  Text.Parsec.try parserLiteralBool,
-  Text.Parsec.try parserLiteralNumber,
-  Text.Parsec.try parserLiteralString,
-  Text.Parsec.try parserGet,
-  Text.Parsec.try parserIf,
-  Text.Parsec.try parserLet,
-  Text.Parsec.try parserLambda,
-  parserApply]
+parserAtomic = Text.Parsec.choice [Text.Parsec.try parserNull, Text.Parsec.try parserBoolean, Text.Parsec.try parserNumber, Text.Parsec.try parserString]
+  where parserNull = parserReserved "#n" >> (return Null)
+        parserBoolean = (Text.Parsec.<|>) (parserReserved "#t" >> (return $ Boolean True))
+                                          (parserReserved "#f" >> (return $ Boolean False))
+        parserNumber = fmap (Number . either fromInteger realToFrac) (Text.Parsec.Token.naturalOrFloat lexer)
+        parserString = fmap String (Text.Parsec.Token.stringLiteral lexer)
 
-parserLiteralNull :: Text.Parsec.Parsec String u Control
-parserLiteralNull = parserReserved "#n" >> return LiteralNull
+meta :: Identifier -> Text.Parsec.SourcePos -> [Control] -> Control
+meta η π γs = Application (Variable $ "meta-" ++ η) (γs ++ [Literal $ String $ show (Text.Parsec.sourceLine π) ++ ":" ++ show (Text.Parsec.sourceColumn π)])
 
-parserLiteralBool :: Text.Parsec.Parsec String u Control
-parserLiteralBool = (Text.Parsec.<|>) (parserReserved "#t" >> (return $ LiteralBool True))
-                                      (parserReserved "#f" >> (return $ LiteralBool False))
+-- meta :: String -> [Control] -> Control
+-- meta τ γs = Application (Variable $ "meta-" ++ τ) γs
+-- 
+-- instrument :: Control -> Control
+-- instrument (Literal θ) = meta "literal" [Literal θ]
+-- instrument (Variable η) = meta "variable" [Literal $ String η, Variable η]
+-- instrument (Condition γ γ' γ'') = Condition (meta "condition" [instrument γ]) (instrument γ') (instrument γ'')
+-- instrument (Application γ γs) = meta "application" [instrument γ, Application (Variable "list") (map instrument γs)]
+-- instrument (Binding η γ γ') = Binding η (meta "binding" [Literal $ String η, instrument γ]) (instrument γ')
 
-parserLiteralNumber :: Text.Parsec.Parsec String u Control
-parserLiteralNumber = Control.Monad.liftM (LiteralNumber . fromInteger) parserInteger
+parserLiteral :: String -> Text.Parsec.Parsec String u Control
+parserLiteral τ
+  | not $ Data.List.isInfixOf "literal" τ = fmap Literal parserAtomic
+  | otherwise = do π <- Text.Parsec.getPosition
+                   θ <- parserAtomic
+                   return $ meta "literal" π [Literal θ]
 
-parserLiteralString :: Text.Parsec.Parsec String u Control
-parserLiteralString = Control.Monad.liftM LiteralString parserStringLiteral
+parserVariable :: String -> Text.Parsec.Parsec String u Control
+parserVariable τ
+ | not $ Data.List.isInfixOf "variable" τ = fmap Variable parserIdentifier
+ | otherwise = do π <- Text.Parsec.getPosition
+                  η <- parserIdentifier
+                  return $ meta "variable" π [Literal $ String η, Variable η]
 
-parserGet :: Text.Parsec.Parsec String u Control
-parserGet = Control.Monad.liftM Get parserIdentifier
+parserBinding :: String -> Text.Parsec.Parsec String u Control
+parserBinding τ
+  | not $ Data.List.isInfixOf "binding" τ = parserParens $ parserReserved "let" >> Control.Monad.liftM3 Binding parserIdentifier (parser τ) (parser τ)
+  | otherwise = do π <- Text.Parsec.getPosition
+                   parserParens $ do parserReserved "let"
+                                     η <- parserIdentifier
+                                     γ <- parser τ
+                                     γ' <- parser τ
+                                     return $ Binding η (meta "binding" π [Literal $ String η, γ]) γ'
 
-parserIf :: Text.Parsec.Parsec String u Control
-parserIf = parserParens $ do parserReserved "if"
-                             γ <- parserControl
-                             γ' <- parserControl
-                             γ'' <- parserControl
-                             return $ If γ γ' γ''
+parserCondition :: String -> Text.Parsec.Parsec String u Control
+parserCondition τ
+  | not $ Data.List.isInfixOf "condition" τ = parserParens $ parserReserved "if" >> Control.Monad.liftM3 Condition (parser τ) (parser τ) (parser τ)
+  | otherwise = do π <- Text.Parsec.getPosition
+                   parserParens $ do parserReserved "if"
+                                     γ <- parser τ
+                                     γ' <- parser τ
+                                     γ'' <- parser τ
+                                     return $ Condition (meta "condition" π [γ]) γ' γ''
 
-parserLet :: Text.Parsec.Parsec String u Control
-parserLet = parserParens $ do parserReserved "let"
-                              η <- parserIdentifier
-                              γ <- parserControl
-                              γ' <- parserControl
-                              return $ Let η γ γ'
+parserAbstraction :: String -> Text.Parsec.Parsec String u Control
+parserAbstraction τ
+  | not $ Data.List.isInfixOf "abstraction" τ = parserParens $ parserReserved "lambda" >> Control.Monad.liftM2 Abstraction (parserParens (Text.Parsec.many parserIdentifier)) (parser τ)
+  | otherwise = do π <- Text.Parsec.getPosition
+                   parserParens $ do parserReserved "lambda"
+                                     ηs <- parserParens $ Text.Parsec.many parserIdentifier
+                                     γ <- parser τ
+                                     return $ meta "abstraction" π [Application (Variable "list") (map (Literal . String) ηs), Abstraction ηs γ]
 
-parserLambda :: Text.Parsec.Parsec String u Control
-parserLambda = parserParens $ do parserReserved "lambda"
-                                 ηs <- parserParens (Text.Parsec.many parserIdentifier)
-                                 γ <- parserControl
-                                 return $ Lambda ηs γ
+parserApplication :: String -> Text.Parsec.Parsec String u Control
+parserApplication τ
+  | not $  Data.List.isInfixOf "application" τ = parserParens $ Control.Monad.liftM2 Application (parser τ) (Text.Parsec.many $ parser τ)
+  | otherwise = do π <- Text.Parsec.getPosition
+                   parserParens $ do γ <- parser τ
+                                     γs <- Text.Parsec.many $ parser τ
+                                     return $ meta "application" π [γ, Application (Variable "list") γs]
 
-parserApply :: Text.Parsec.Parsec String u Control
-parserApply = parserParens $ do γ <- parserControl
-                                γs <- Text.Parsec.many parserControl
-                                return $ Apply γ γs
+parser :: String -> Text.Parsec.Parsec String u Control
+parser τ = Text.Parsec.choice [
+  Text.Parsec.try $ parserLiteral τ,
+  Text.Parsec.try $ parserVariable τ,
+  Text.Parsec.try $ parserBinding τ,
+  Text.Parsec.try $ parserCondition τ,
+  Text.Parsec.try $ parserAbstraction τ,
+  Text.Parsec.try $ parserApplication τ]
 
--------------------
--- System Stored --
--------------------
+-----------------
+-- Environment --
+-----------------
 
-data ValueStored = AddressStored Address deriving (Eq, Show)
-data ElementStored = DataStored (Data ValueStored) deriving (Eq, Show)
+type Environment v = Data.Map.Map Identifier v
 
-instance System ValueStored ElementStored where
-  dataToValue σ δ = (Data.Map.Strict.insert (fresh σ) (DataStored δ) σ, AddressStored (fresh σ))
-  valueToData σ (AddressStored α) = let (DataStored δ) = σ Data.Map.Strict.! α in δ
-  mutate σ (AddressStored α) δ = Just $ Data.Map.Strict.insert α (DataStored δ) σ
-  inspect σ (AddressStored α) = "&" ++ show α
+instance (ShowIndent v) => ShowIndent (Environment v) where
+  showIndent ι ε = "{" ++ concat (map (\(η, ξ) -> indent (ι + 1) ++ η ++ ": " ++ showIndent (ι + 1) ξ) (Data.Map.toAscList ε)) ++ "}"
 
-instance ShowIndent ValueStored where
-  showIndent _ (AddressStored α) = "&" ++ show α
+-----------
+-- Store --
+-----------
 
-instance ShowIndent ElementStored where
-  showIndent ι (DataStored δ) = showIndent ι δ
+type Address = Data.Word.Word32
 
--------------------------
--- System StoredReuse  --
--------------------------
+type Store e = Data.Map.Map Address e
 
-data ValueStoredReuse = AddressStoredReuse Address deriving (Eq, Show)
-data ElementStoredReuse = DataStoredReuse (Data ValueStoredReuse) deriving (Eq, Show)
-
-instance System ValueStoredReuse ElementStoredReuse where
-  dataToValue σ δ = (Data.Map.Strict.insert (reuse σ (DataStoredReuse δ)) (DataStoredReuse δ) σ, AddressStoredReuse (fresh σ))
-  valueToData σ (AddressStoredReuse α) = let (DataStoredReuse δ) = σ Data.Map.Strict.! α in δ
-  mutate σ (AddressStoredReuse α) δ = Just $ Data.Map.Strict.insert α (DataStoredReuse δ) σ
-  inspect σ (AddressStoredReuse α) = "&" ++ show α
-
-instance ShowIndent ValueStoredReuse where
-  showIndent _ (AddressStoredReuse α) = "&" ++ show α
-
-instance ShowIndent ElementStoredReuse where
-  showIndent ι (DataStoredReuse δ) = showIndent ι δ
-
--------------------
--- System Inline --
--------------------
-
-data ValueInline = DataInline (Data ValueInline) deriving (Eq, Show)
-data ElementInline = Void deriving (Eq, Show)
-
-instance System ValueInline ElementInline where
-  dataToValue σ δ = (σ, DataInline δ)
-  valueToData _ (DataInline δ) = δ
-  mutate _ _ _ = Nothing
-  inspect _ (DataInline δ) = showData δ
-
-instance ShowIndent ValueInline where
-  showIndent ι (DataInline δ) = showIndent ι δ
-
-instance ShowIndent ElementInline where
-  showIndent _ (Void) = error "ElementInline should never be instantiated"
+instance (ShowIndent e) => ShowIndent (Store e) where
+  showIndent ι σ = "[" ++ concat (map (\(α, ψ) -> indent (ι + 1) ++ show α ++ " -> " ++ showIndent (ι + 1) ψ) (Data.Map.toAscList σ)) ++ "]"
 
 ------------------
--- System Mixed --
+-- Kontinuation --
 ------------------
 
-data ValueMixed = NullMixed
-                | BoolMixed Bool
-                | NumberMixed Number
-                | StringMixed String
-                | BuiltinMixed Builtin
-                | ClosureMixed (Environment ValueMixed) [Identifier] Control
-                | AddressMixed Address
-                deriving (Eq, Show)
+data Kontinuation v = Bind (Environment v) Identifier Control (Kontinuation v)
+                    | Apply (Environment v) [Control] [v] (Kontinuation v)
+                    | Branch (Environment v) Control Control (Kontinuation v)
+                    | Finish
 
-data ElementMixed = ConsMixed ValueMixed ValueMixed deriving (Eq, Show)
+instance (ShowIndent v) => ShowIndent (Kontinuation v) where
+  showIndent ι (Bind ε η γ κ) = "(bind " ++ η ++ showIndentOne ι ε ++ showIndentOne ι γ ++ showIndentOne ι κ ++ ")"
+  showIndent ι (Apply ε γs ξs κ) = "(apply" ++ showIndentOne ι ε ++ showIndentAllBracket ι γs ++ showIndentAllBracket ι ξs ++ showIndentOne ι κ ++ ")"
+  showIndent ι (Branch ε γ γ' κ) = "(branch " ++ showIndentOne ι ε ++ showIndentOne ι γ ++ showIndentOne ι γ' ++ showIndentOne ι κ ++ ")"
+  showIndent _ Finish = "(finish)"
 
-instance System ValueMixed ElementMixed where
-  dataToValue σ Null = (σ, NullMixed)
-  dataToValue σ (Bool ν) = (σ, BoolMixed ν)
-  dataToValue σ (Number ν) = (σ, NumberMixed ν)
-  dataToValue σ (String ν) = (σ, StringMixed ν)
-  dataToValue σ (Builtin ν) = (σ, BuiltinMixed ν)
-  dataToValue σ (Closure ε ηs γ) = (σ, ClosureMixed ε ηs γ)
-  dataToValue σ (Cons ξ ξ') = (Data.Map.Strict.insert (fresh σ) (ConsMixed ξ ξ') σ, AddressMixed $ fresh σ)
-  valueToData σ NullMixed = Null
-  valueToData σ (BoolMixed ν) = Bool ν
-  valueToData σ (NumberMixed ν) = Number ν
-  valueToData σ (StringMixed ν) = String ν
-  valueToData σ (BuiltinMixed ν) = Builtin ν
-  valueToData σ (ClosureMixed ε ηs γ) = Closure ε ηs γ
-  valueToData σ (AddressMixed α) = case σ Data.Map.Strict.! α of (ConsMixed ξ ξ') -> Cons ξ ξ'
-  mutate σ (AddressMixed α) (Cons ξ ξ') = Just $ Data.Map.Strict.insert α (ConsMixed ξ ξ') σ
-  mutate _ _ _ = Nothing
-  inspect σ (NullMixed) = showData Null
-  inspect σ (BoolMixed ν) = showData $ Bool ν
-  inspect σ (NumberMixed ν) = showData $ Number ν
-  inspect σ (StringMixed ν) = showData $ String ν
-  inspect σ (BuiltinMixed ν) = showData $ Builtin ν
-  inspect σ (ClosureMixed ε ηs γ) = showData $ Closure ε ηs γ
-  inspect σ (AddressMixed α) = "&" ++ show α
+-----------
+-- State --
+-----------
 
-instance ShowIndent ValueMixed where
-  showIndent ι (NullMixed) = showIndent ι (Null :: Data ValueMixed)
-  showIndent ι (BoolMixed ν) = showIndent ι (Bool ν :: Data ValueMixed)
-  showIndent ι (NumberMixed ν) = showIndent ι (Number ν :: Data ValueMixed)
-  showIndent ι (StringMixed ν) = showIndent ι (String ν :: Data ValueMixed)
-  showIndent ι (BuiltinMixed ν) = showIndent ι (Builtin ν :: Data ValueMixed)
-  showIndent ι (ClosureMixed ε ηs γ) = showIndent ι (Closure ε ηs γ :: Data ValueMixed)
-  showIndent ι (AddressMixed α) = "&" ++ show α
+data State v e = Ongoing Control (Environment v) (Store e) (Kontinuation v)
+               | Success (Store e) v
+               | Failure (Store e) (Kontinuation v) (String, String)
 
-instance ShowIndent ElementMixed where
-  showIndent ι (ConsMixed ξ ξ') = showIndent ι (Cons ξ ξ')
+instance (ShowIndent v, ShowIndent e) => ShowIndent (State v e) where
+  showIndent ι (Ongoing γ ε σ κ) = "(ongoing" ++ showIndentOne ι γ ++ showIndentOne ι ε ++ showIndentOne ι σ ++ showIndentOne ι κ ++ ")"
+  showIndent ι (Success σ ξ) = "(success" ++ showIndentOne ι ξ ++ showIndentOne ι σ ++ ")"
+  showIndent ι (Failure σ κ (τ,τ')) = "(failure " ++ τ ++ " >> " ++ τ' ++ showIndentOne ι σ ++ showIndentOne ι κ ++ ")"
+
+------------
+-- System --
+------------
+
+class (Eq v) => System v e | e -> v where
+  dataToValue :: Store e -> Data v -> (Store e, v)
+  valueToData :: Store e -> v -> Data v
+  mutate :: Store e -> v -> Data v -> Either String (Store e)
+  inspect :: Store e -> v -> String
+  initialStore :: Store e
+  initialStore = Data.Map.empty
+
+-----------------
+-- Interpreter --
+-----------------
+
+step :: (System v e) => State v e -> IO (State v e)
+step (Ongoing (Literal θ) _ σ κ) = kontinue κ (dataToValue σ (Atomic θ))
+step (Ongoing (Abstraction ηs γ) ε σ κ) = kontinue κ (dataToValue σ (Compound $ Closure (ε, ηs, γ)))
+step (Ongoing (Variable η) ε σ κ) = maybe (return $ Failure σ κ ("ReferenceError", η ++ " is not defined")) (kontinue κ . (σ,)) (Data.Map.lookup η ε)
+step (Ongoing (Binding η γ γ') ε σ κ) = return $ Ongoing γ ε σ (Bind ε η γ' κ)
+step (Ongoing (Application γ γs) ε σ κ) = return $ Ongoing γ ε σ (Apply ε γs [] κ)
+step (Ongoing (Condition γ γ' γ'') ε σ κ) = return $ Ongoing γ ε σ (Branch ε γ' γ'' κ)
+step φ = return φ
+
+kontinue :: (System v e) => Kontinuation v -> (Store e, v) -> IO (State v e)
+kontinue Finish (σ, ξ) = return $ Success σ ξ
+kontinue (Branch ε γ γ' κ) (σ, ξ) = case valueToData σ ξ of
+  (Atomic (Boolean (False))) -> return $ Ongoing γ' ε σ κ
+  _ -> return $ Ongoing γ  ε σ κ
+kontinue (Bind ε η γ κ) (σ, ξ) = return $ Ongoing γ (Data.Map.insert η ξ ε) σ κ
+kontinue (Apply ε (γ:γs) ξs κ) (σ, ξ) = return $ Ongoing γ ε σ (Apply ε γs (ξs ++ [ξ]) κ)
+kontinue (Apply ε [] ξs κ) (σ, ξ) = apply σ κ (valueToData σ (head $ ξs ++ [ξ])) (tail $ ξs ++ [ξ]) 
+
+apply :: (System v e) => Store e -> Kontinuation v -> Data v -> [v] -> IO (State v e)
+apply σ κ δ@(Compound (Closure (ε, ηs, γ))) ξs = return $ if length ηs == length ξs
+  then Ongoing γ (Data.Map.union (Data.Map.fromList (zip ηs ξs)) ε) σ κ
+  else Failure σ κ ("ArityError", showData δ ++  " expected " ++ show (length ηs) ++ " argument(s) but received " ++ show (length ξs)) 
+apply σ κ (Atomic (Builtin β)) ξs = fmap (either (Failure σ κ . ("BuiltinError",) . format) id) (applyBuiltin σ κ β ξs)
+  where format τ = (showAtomic $ Builtin β) ++ ": " ++ τ ++ ", got: " ++ concat (Data.List.intersperse ", " (map (inspect σ) ξs))
+apply σ κ δ _ = return $ Failure σ κ ("TypeError", showData δ ++ " cannot be applied")
+
+applyBuiltin :: (System x y) => Store y -> Kontinuation x -> Builtin -> [x] -> IO (Either String (State x y))
+applyBuiltin σ κ "apply" (ξ:ξ':[]) = maybe (return $ Left "did not received a list as second argument")
+                                           (fmap Right . apply σ κ (valueToData σ ξ))
+                                           (loop $ valueToData σ ξ')
+  where loop (Compound (Cons (ξ'', ξ'''))) = fmap (ξ'':) (loop $ valueToData σ ξ''')
+        loop (Atomic Null) = Just []
+        loop _ = Nothing
+applyBuiltin σ κ "read-line" [] = getLine >>= (fmap Right . kontinue κ . (dataToValue σ) . Atomic . String)
+applyBuiltin σ κ "print" ξs@(_:_) = putStrLn (loop (map (valueToData σ) ξs)) >> fmap Right (kontinue κ (dataToValue σ (Atomic Null)))
+  where loop ((Atomic (String τ)) : δs) = τ ++ loop δs
+        loop (δ : δs) = showData δ ++ loop δs
+        loop [] = ""
+applyBuiltin σ κ β ξs = either (return . Left) (fmap Right . kontinue κ) (applyPure σ β ξs)
+
+applyPure :: (System v e) => Store e -> Builtin -> [v] -> Either String (Store e, v)
+applyPure σ "begin" ξs@(_:_) = Right (σ, last ξs)
+applyPure σ "eq?" (ξ:ξ':[]) = Right $ dataToValue σ (Atomic $ Boolean $ ξ == ξ')
+applyPure σ "inspect" ξs = Right $ dataToValue σ (Atomic $ String $ concat $ Data.List.intersperse ", " (map (inspect σ) ξs))
+applyPure σ "cons" (ξ:ξ':[]) = Right $ dataToValue σ (Compound $ Cons (ξ, ξ'))
+applyPure σ "list" ξs = Right $ foldr (\ξ (σ, ξ') -> dataToValue σ (Compound $ Cons (ξ, ξ'))) (dataToValue σ (Atomic $ Null)) ξs
+applyPure σ "car" (ξ:[]) = maybe (Left "expected a pair as first argument")
+                                 (Right . (σ,) . fst)
+                                 (toCons $ valueToData σ ξ)
+applyPure σ "cdr" (ξ:[]) = maybe (Left "expected a pair as first argument")
+                                 (Right . (σ,) . snd)
+                                 (toCons $ valueToData σ ξ)
+applyPure σ "set-car!" (ξ:ξ':[]) = maybe (Left "expected a pair as first argument")
+                                         (fmap (,ξ) . mutate σ ξ . Compound . Cons . (ξ',) . snd)
+                                         (toCons $ valueToData σ ξ)
+applyPure σ "set-cdr!" (ξ:ξ':[]) = maybe (Left "expected a pair as first argument")
+                                         (fmap (,ξ) . mutate σ ξ . Compound . Cons . (,ξ') . fst)
+                                         (toCons $ valueToData σ ξ)
+applyPure σ β ξs = fmap (dataToValue σ) (applyData β (map (valueToData σ) ξs))
+
+applyData :: (Eq v) => Builtin -> [Data v] -> Either String (Data v)
+applyData "raise" (δ : []) = Left $ showData δ
+applyData "any->string" (δ : []) = Right $ Atomic $ String $ showData δ
+applyData "null?" (Atomic (Null) : []) = Right $ Atomic $ Boolean True
+applyData "null?" (_ : []) = Right $ Atomic $ Boolean False
+applyData "boolean?" (Atomic (Boolean _) : []) = Right $ Atomic $ Boolean True
+applyData "boolean?" (_ : []) = Right $ Atomic $ Boolean False
+applyData "number?" (Atomic (Number _) : []) = Right $ Atomic $ Boolean True
+applyData "number?" (_ : []) = Right $ Atomic $ Boolean False
+applyData "string?" (Atomic (String _) : []) = Right $ Atomic $ Boolean True
+applyData "string?" (_ : []) = Right $ Atomic $ Boolean False
+applyData "pair?" (Compound (Cons _) : []) = Right $ Atomic $ Boolean True
+applyData "pair?" (_ : []) = Right $ Atomic $ Boolean False
+applyData "procedure?" (Compound (Closure _) : []) = Right $ Atomic $ Boolean True
+applyData "procedure?" (Atomic (Builtin _) : []) = Right $ Atomic $ Boolean True
+applyData "procedure?" (_ : []) = Right $ Atomic $ Boolean False
+applyData β δs = maybe (Left $ "expected only atomic arguments")
+                       (fmap Atomic . applyAtomic β)
+                       (sequence $ map toAtomic δs)
+
+applyAtomic :: String -> [Atomic] -> Either String Atomic
+applyAtomic "eqv?" (θ : θ' : []) = Right $ Boolean $ θ == θ'
+applyAtomic "&&"   (Boolean ο : Boolean ο' : []) = Right $ Boolean $ ο && ο'
+applyAtomic "||"   (Boolean ο : Boolean ο' : []) = Right $ Boolean $ ο || ο'
+applyAtomic "="    (Number  ν : Number  ν' : []) = Right $ Boolean $ ν == ν'
+applyAtomic "<"    (Number  ν : Number  ν' : []) = Right $ Boolean $ ν <  ν'
+applyAtomic "<="   (Number  ν : Number  ν' : []) = Right $ Boolean $ ν <= ν'
+applyAtomic "+"    θs = maybe (Left "expected only numbers")
+                              (Right . Number . foldr (+) 0)
+                              (sequence $ map (toNumber . Atomic) θs)
+applyAtomic "-"    (Number  ν : Number  ν' : []) = Right $ Number  $ ν -  ν'
+applyAtomic "-"    (Number  ν : []) = Right $ Number  $ 0 - ν
+applyAtomic "*"    θs = maybe (Left "expected only numbers")
+                              (Right . Number . foldr (*) 1)
+                              (sequence $ map (toNumber . Atomic) θs)
+applyAtomic "/"    (Number  ν : Number  ν' : []) = Right $ Number  $ ν /  ν'
+applyAtomic "expt" (Number  ν : Number  ν' : []) = Right $ Number  $ ν ** ν'
+applyAtomic "sqrt" (Number  ν : []) = Right $ Number  $ sqrt ν
+applyAtomic "string-append" θs = maybe (Left "expected only strings")
+                                       (Right . String . concat)
+                                       (sequence $ map (toString . Atomic) θs)
+applyAtomic "string-length" (String τ : []) = Right $ Number $ fromIntegral $ length τ
+applyAtomic "substring" (String τ : Number ν : Number ν' : []) = Right $ String $ take (round $ ν' - ν) (drop (round ν) τ)
+applyAtomic "number->string" (Number ν : []) = Right $ String $ showAtomic $ Number ν
+applyAtomic "string->number" (String τ : []) = case reads τ of
+  [(ν, "")] -> Right $ Number ν
+  _ -> Left "cannot parse as number"
+applyAtomic β θs = Left $ if elem β builtins then "invalid arguments" else "unsupported builtin"
+
+---------------------------------------
+-- System1: Data Passed-By-Reference --
+---------------------------------------
+
+data Value1 = Address1 Address
+
+instance Eq Value1 where
+  (Address1 α) == (Address1 α') = α == α'
+
+data Element1 = Data1 (Data Value1)
+
+fresh :: Store e -> Address
+fresh σ = maybe 0 ((+1) . fst) (Data.Map.lookupMax σ)
+
+instance System Value1 Element1 where
+  dataToValue σ δ = (σ', Address1 α)
+    where α = fresh σ
+          σ' = Data.Map.insert α (Data1 δ) σ
+  valueToData σ (Address1 α) = δ where
+    (Data1 δ) = σ Data.Map.! α
+  mutate σ (Address1 α) δ = Right σ'
+    where σ' = Data.Map.insert α (Data1 δ) σ
+  inspect σ (Address1 α) = "&" ++ show α ++ "[" ++ showData δ ++ "]"
+    where (Data1 δ) = σ Data.Map.! α
+
+instance ShowIndent Value1 where
+  showIndent _ (Address1 α) = "&" ++ show α
+
+instance ShowIndent Element1 where
+  showIndent ι (Data1 δ) = showIndent ι δ
+
+  -------------------------------------------------------------------------------
+  -- System2: Atomic Data Passed-By-Value & Compound Data Passed-By-Reference  --
+  -------------------------------------------------------------------------------
+
+data Value2 = Atomic2 Atomic
+            | Address2 Address
+
+instance Eq Value2 where
+  (Atomic2 θ) == (Atomic2 θ') = θ == θ'
+  (Address2 α) == (Address2 α') = α == α'
+
+data Element2 = Compound2 (Compound Value2)
+
+instance System Value2 Element2 where
+  dataToValue σ (Atomic θ) = (σ, Atomic2 θ)
+  dataToValue σ (Compound π) = (σ', Address2 α)
+    where α = fresh σ
+          σ' = Data.Map.insert α (Compound2 π) σ
+  valueToData σ (Atomic2 θ) = Atomic θ
+  valueToData σ (Address2 α) = Compound π
+    where (Compound2 π) = σ Data.Map.! α
+  mutate σ (Address2 α) (Compound π) = Right σ'
+    where σ' = Data.Map.insert α (Compound2 π) σ
+  mutate _ _ _ = Left "Cannot mutate atomic data"
+  inspect σ (Atomic2 θ) = showAtomic θ
+  inspect σ (Address2 α) = "&" ++ show α ++ "[" ++ showCompound π ++ "]"
+    where (Compound2 π) = σ Data.Map.! α
+
+instance ShowIndent Value2 where
+  showIndent ι (Atomic2 δ) = showIndent ι δ
+  showIndent ι (Address2 α) = "&" ++ show α
+
+instance ShowIndent Element2 where
+  showIndent ι (Compound2 δ) = showIndent ι δ
+
+----------------------------------------------------
+-- System3: Data Passed-By-Reference & Interning  --
+----------------------------------------------------
+
+data Value3 = Address3 Address
+
+instance Eq Value3 where
+  (Address3 α) == (Address3 α') = α == α'
+
+data Element3 = Data3 (Data Value3)
+
+interns :: [Atomic] 
+interns = [Null, Boolean True, Boolean False, Number 0, Number $ 0/0]
+
+instance System Value3 Element3 where
+  dataToValue σ δ = maybe (σ', Address3 α) ifJust μ 
+    where μ = (toAtomic δ) >>= (`Data.List.elemIndex` interns) 
+          ifJust ν = (σ, Address3 $ fromIntegral ν)
+          α = fresh σ
+          σ' = Data.Map.insert α (Data3 δ) σ
+  valueToData σ (Address3 α) = δ
+    where (Data3 δ) = σ Data.Map.! α
+  mutate σ (Address3 α) δ
+    | fromIntegral α < length interns = Left "Mutations disabled"
+    | otherwise = Right $ Data.Map.insert α (Data3 δ) σ
+  initialStore = Data.Map.fromAscList $ zip [0..] (map (Data3 . Atomic) interns)
+  inspect σ (Address3 α) = "&" ++ show α ++ "[" ++ showData δ ++ "]"
+    where (Data3 δ) = σ Data.Map.! α
+
+instance ShowIndent Value3 where
+  showIndent _ (Address3 α) = "&" ++ show α
+
+instance ShowIndent Element3 where
+  showIndent ι (Data3 δ) = showIndent ι δ
+
+-----------------------------------
+-- System4: Data Passed-By-Value --
+-----------------------------------
+
+data Value4 = Data4 (Data Value4)
+
+instance Eq Value4 where
+  (Data4 δ) == (Data4 δ') = error "data are not equalable"
+
+data Element4 = Void
+
+instance System Value4 Element4 where
+  dataToValue σ δ = (σ, Data4 δ)
+  valueToData _ (Data4 δ) = δ
+  mutate _ _ _ = Left "System \"inline\" does not support mutation"
+  inspect _ (Data4 δ) = showData δ
+
+instance ShowIndent Value4 where
+  showIndent ι (Data4 δ) = showIndent ι δ
+
+instance ShowIndent Element4 where
+  showIndent _ (Void) = error "Element4 should never be instantiated"
 
 ----------
 -- Main --
@@ -439,52 +562,75 @@ instance ShowIndent ElementMixed where
 
 builtins :: [Builtin]
 builtins = [
+  -- applyBuiltin
+  "apply",
   "read-line",
-  "write",
+  "print",
+  -- applyPure
+  "begin",
   "eq?",
   "inspect",
   "cons",
+  "list",
   "car",
   "cdr",
   "set-car!",
   "set-cdr!",
+  -- applyData
+  "raise",
   "equal?",
+  "any->string",
+  "null?",
+  "boolean?",
+  "number?",
+  "string?",
+  "pair?",
+  "procedure?",
+  -- applyAtomic
   "||",
   "&&",
   "=",
+  "!=",
   "<=",
   "+",
   "-",
   "*",
   "/",
-  "any->string",
+  "expt",
+  "sqrt",
   "number->string",
   "string->number",
+  "string-length",
   "string-append",
   "substring"]
 
-execute :: (System x y) => Control -> IO (State x y)
-execute γ = let (σ, ε) = Data.List.foldl' accumulator (Data.Map.Strict.empty, Data.Map.Strict.empty) builtins
-            in run $ Ongoing γ ε σ SuccessKont
-  where accumulator (σ, ε) β = let (σ', ξ) = dataToValue σ (Builtin β)
-                               in (σ', Data.Map.Strict.insert β ξ ε)
+execute :: (ShowIndent v, ShowIndent e, System v e) => Control -> IO (State v e)
+execute γ = let (σ, ε) = Data.List.foldl' accumulator (initialStore, Data.Map.empty) builtins
+            in loop $ Ongoing γ ε σ Finish
+  where loop φ@(Ongoing _ _ _ _) = step φ >>= loop -- putStrLn (showIndent 0 φ) >> 
+        loop φ = return φ
+        accumulator (σ, ε) β = let (σ', ξ) = dataToValue σ (Atomic $ Builtin β)
+                               in (σ', Data.Map.insert β ξ ε)
 
-executeSystem :: String -> Control -> IO String
-executeSystem "inline" γ = Control.Monad.liftM (showIndent 0) (execute γ :: IO (State ValueInline ElementInline))
-executeSystem "mixed" γ = Control.Monad.liftM (showIndent 0) (execute γ :: IO (State ValueMixed ElementMixed))
-executeSystem "stored" γ = Control.Monad.liftM (showIndent 0) (execute γ :: IO (State ValueStored ElementStored))
-executeSystem "stored-reuse" γ = Control.Monad.liftM (showIndent 0) (execute γ :: IO (State ValueStoredReuse ElementStoredReuse))
-executeSystem λ γ = return $ "Unknown system: " ++ λ
+top :: String -> Either Text.Parsec.ParseError Control -> IO String
+top _ (Left ε) = return $ show ε
+top "reference" (Right γ) = fmap printState (execute γ :: IO (State Value1 Element1))
+top "mixed" (Right γ) = fmap printState (execute γ :: IO (State Value2 Element2))
+top "reference-interning" (Right γ) = fmap printState (execute γ :: IO (State Value3 Element3))
+top "value" (Right γ) = fmap printState (execute γ :: IO (State Value4 Element4))
+top λ _ = return $ "Error >> unknown system " ++ λ
 
-top :: String -> String -> IO String
-top λ ρ = Text.Parsec.String.parseFromFile parserControl ρ >>= (either (return . show) (executeSystem λ))
-
-run :: (System x y) => State x y -> IO (State x y)
-run φ@(Ongoing _ _ _ _) = step φ >>= run
-run φ = return φ
+printState :: (ShowIndent x, ShowIndent y, System x y) => State x y -> String
+-- printState = showIndent 0
+printState φ@(Ongoing _ _ _ _) = "Error >> expected a final state but got: " ++ showIndent 0 φ
+printState φ@(Failure σ κ (τ, τ')) = "Failure >> " ++ τ ++ ": " ++ τ'
+printState φ@(Success σ ξ) = "Success >> " ++ (showData $ valueToData σ ξ)
 
 main :: IO ()
-main = do ξs <- System.Environment.getArgs
-          if length ξs /= 2
-          then putStrLn "Usage: cesk (inline|mixed|stored|stored-reuse) program.lsp"
-          else top (head ξs) (head $ tail ξs) >>= putStrLn
+main = do νs <- System.Environment.getArgs
+          if length νs /= 2
+          then do putStrLn "Usage: cesk (reference|value|mixed|reference-interning) programs.scm"
+                  putStrLn "       cesk instrument[-literal][-variable][-binding][-condition][-abstraction][-application] program.scm"
+          else if Data.List.isPrefixOf "instrument" (head νs)
+               then Text.Parsec.String.parseFromFile (parser $ head νs) (head $ tail νs) >>= putStrLn . either show (showIndent 0) 
+               else Text.Parsec.String.parseFromFile (parser "") (head $ tail νs) >>= top (head νs) >>= putStrLn -- >> return () -- 
