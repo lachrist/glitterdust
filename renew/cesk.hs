@@ -565,7 +565,7 @@ builtins = [
   -- applyBuiltin
   "apply",
   "read-line",
-  "print",
+  "print",p
   -- applyPure
   "begin",
   "eq?",
